@@ -28,8 +28,6 @@ Supported SCIP indexers and their install commands:
 """
 
 import os
-# Fix for protobuf 4.x+ version mismatch with scip-python's generated protos
-os.environ["PROTOCOL_BUFFERS_PYTHON_IMPLEMENTATION"] = "python"
 import re
 import shutil
 import subprocess
@@ -225,6 +223,8 @@ class ScipIndexParser:
         }
         """
         try:
+            # Fix for protobuf 4.x+ version mismatch with scip-python's generated protos
+            os.environ["PROTOCOL_BUFFERS_PYTHON_IMPLEMENTATION"] = "python"
             from . import scip_pb2  # type: ignore
         except ImportError:
             error_logger(
@@ -314,17 +314,13 @@ class ScipIndexParser:
                     
                     # If kind is 0 (Unspecified), guess from symbol string
                     if kind == 0:
-                        if sym.endswith("()."):
+                        if "#" in sym:
+                            if sym.endswith("#"):
+                                kind = 7   # Class
+                            elif "()." in sym:
+                                kind = 26  # Method
+                        elif sym.endswith("()."):
                             kind = 17  # Function
-                        elif "#" in sym and not sym.endswith("."):
-                             # If it ends with # (e.g. MyClass#) or has # then members
-                             if sym.endswith("#"):
-                                 kind = 7 # Class
-                             elif sym.endswith("()."):
-                                 kind = 26 # Method
-                             else:
-                                 # Possibly a field or nested class or parameter
-                                 pass 
 
                     display = defn.get("display_name", "")
                     doc_str = defn.get("documentation", "")
@@ -454,14 +450,43 @@ class ScipIndexParser:
         self, ref_line: int, definition_occurrences: list
     ) -> Optional[str]:
         """
-        Given a reference at `ref_line`, find the symbol of the most recent
-        definition that started before this line. That's the 'caller'.
+        Given a reference at `ref_line`, find the innermost enclosing definition.
+        
+        Uses SCIP occurrence ranges: each occurrence has a range [start_line, start_col, end_line, end_col].
+        For definitions with multi-line ranges, we check if ref_line falls within [start, end].
+        For single-line definitions (range has 3 elements = same-line), we fall back to
+        finding the nearest definition that starts before ref_line (best-effort).
         """
-        best = None
-        best_line = -1
+        # First pass: try to find a definition whose range actually contains ref_line
+        candidates_with_range = []
+        candidates_without_range = []
+        
         for occ in definition_occurrences:
-            occ_line = occ.range[0] + 1 if occ.range else 0
-            if occ_line <= ref_line and occ_line > best_line:
-                best = occ.symbol
-                best_line = occ_line
-        return best
+            if not occ.range:
+                continue
+            occ_start_line = occ.range[0] + 1
+            # SCIP range format: [start_line, start_col, end_line, end_col] (4 elements)
+            # or [start_line, start_col, end_col] for same-line (3 elements)
+            if len(occ.range) >= 4:
+                occ_end_line = occ.range[2] + 1
+                if occ_start_line <= ref_line <= occ_end_line:
+                    candidates_with_range.append((occ.symbol, occ_start_line, occ_end_line))
+            else:
+                # Same-line definition — can only match if ref is on the same line
+                if occ_start_line == ref_line:
+                    candidates_with_range.append((occ.symbol, occ_start_line, occ_start_line))
+                elif occ_start_line <= ref_line:
+                    candidates_without_range.append((occ.symbol, occ_start_line))
+        
+        # Return the innermost (smallest range) enclosing definition
+        if candidates_with_range:
+            # Sort by range size (smallest = innermost)
+            candidates_with_range.sort(key=lambda c: c[2] - c[1])
+            return candidates_with_range[0][0]
+        
+        # Fallback: nearest definition starting before ref_line
+        if candidates_without_range:
+            candidates_without_range.sort(key=lambda c: c[1], reverse=True)
+            return candidates_without_range[0][0]
+        
+        return None
