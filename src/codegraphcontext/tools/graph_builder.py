@@ -1,4 +1,3 @@
-
 # src/codegraphcontext/tools/graph_builder.py
 import asyncio
 import pathspec
@@ -432,7 +431,7 @@ class GraphBuilder:
                     """, path=file_path_str, module_name=module_name, props=rel_props)
                 else:
                     # Existing logic for Python (and other languages)
-                    # For KùzuDB, Module schema only has: name, lang, full_import_name.
+                    # For K\u00f9zuDB, Module schema only has: name, lang, full_import_name.
                     # 'alias' belongs on the relationship.
                     
                     set_clauses = []
@@ -571,6 +570,20 @@ class GraphBuilder:
                                 if full_import_name.replace('.', '/') in path:
                                     resolved_path = path
                                     break
+                            # TypeScript/JavaScript: try .js \u2192 .ts/.tsx extension mapping
+                            if not resolved_path:
+                                normalized = full_import_name
+                                for js_ext, ts_ext in [('.js', '.ts'), ('.jsx', '.tsx'), ('.mjs', '.mts')]:
+                                    if normalized.endswith(js_ext):
+                                        normalized = normalized[:-len(js_ext)] + ts_ext
+                                        break
+                                # Also strip extension for extensionless imports
+                                stem = normalized.rsplit('.', 1)[0] if '.' in normalized.rsplit('/', 1)[-1] else normalized
+                                for path in possible_paths:
+                                    path_stem = path.rsplit('.', 1)[0] if '.' in path.rsplit('/', 1)[-1] else path
+                                    if stem.replace('.', '/') in path_stem or normalized.replace('.', '/') in path:
+                                        resolved_path = path
+                                        break
             
             if not resolved_path:
                 # Only log warning if we're not skipping external resolution
@@ -625,8 +638,8 @@ class GraphBuilder:
             if caller_context and len(caller_context) == 3 and caller_context[0] is not None:
                 caller_name, _, caller_line_number = caller_context
                 
-                # KùzuDB workaround: Try Function->Function first, then other combinations
-                # This avoids polymorphic MERGE which KùzuDB doesn't support
+                # K\u00f9zuDB workaround: Try Function->Function first, then other combinations
+                # This avoids polymorphic MERGE which K\u00f9zuDB doesn't support
                 call_params = {
                     'caller_name': caller_name,
                     'caller_file_path': caller_file_path,
@@ -1018,8 +1031,8 @@ class GraphBuilder:
         a scip-<lang> binary is available.
 
         Steps:
-          1. Run scip-<lang> CLI → index.scip
-          2. Parse index.scip → nodes + reference edges
+          1. Run scip-<lang> CLI \u2192 index.scip
+          2. Parse index.scip \u2192 nodes + reference edges
           3. Write nodes to graph (same MERGE queries as Tree-sitter path)
           4. Tree-sitter supplement: add source text + cyclomatic_complexity
           5. Write SCIP CALLS edges (precise, no heuristics)
@@ -1046,8 +1059,8 @@ class GraphBuilder:
                     )
                     # Hand off to Tree-sitter pipeline by re-calling without SCIP flag
                     # (the flag is checked at the start; override is not needed because
-                    # we return here — caller will not re-enter this branch)
-                    raise RuntimeError("SCIP produced no index — triggering Tree-sitter fallback")
+                    # we return here \u2014 caller will not re-enter this branch)
+                    raise RuntimeError("SCIP produced no index \u2014 triggering Tree-sitter fallback")
 
                 # Step 2: Parse index.scip
                 scip_data = ScipIndexParser().parse(scip_file, path)
@@ -1071,7 +1084,7 @@ class GraphBuilder:
                 if job_id:
                     self.job_manager.update_job(job_id, current_file=abs_path_str)
 
-                # Step 5: Tree-sitter supplement — add source text, complexity, imports and bases
+                # Step 5: Tree-sitter supplement \u2014 add source text, complexity, imports and bases
                 file_path = Path(abs_path_str)
                 if file_path.exists() and file_path.suffix in self.parsers:
                     try:
@@ -1114,7 +1127,7 @@ class GraphBuilder:
             # Step 6: Create INHERITS relationships (Supplemented from Tree-sitter)
             self._create_all_inheritance_links(list(files_data.values()), imports_map)
 
-            # Step 7: Write SCIP CALLS edges — precise cross-file resolution
+            # Step 7: Write SCIP CALLS edges \u2014 precise cross-file resolution
             with self.driver.session() as session:
                 for file_data in files_data.values():
                     for edge in file_data.get("function_calls_scip", []):
@@ -1133,30 +1146,27 @@ class GraphBuilder:
                             callee_line=edge["callee_line"],
                             ref_line=edge["ref_line"],
                             )
-                        except Exception:
-                            pass  # best-effort: node might not be indexed yet
+                        except Exception as e:
+                            debug_log(f"SCIP CALLS edge skipped: {self._name_from_symbol(edge['caller_symbol'])} -> {edge['callee_name']}: {e}")
 
             if job_id:
                 self.job_manager.update_job(job_id, status=JobStatus.COMPLETED, end_time=datetime.now())
 
         except RuntimeError as e:
             # Graceful fallback to Tree-sitter when SCIP fails
-            warning_logger(f"SCIP path failed ({e}), re-running with Tree-sitter...")
-            # Temporarily disable the flag in-memory so the recursive call goes straight to TS
-            # (we do this by calling the internal Tree-sitter steps directly)
+            warning_logger(f"SCIP path failed ({e}), falling back to Tree-sitter...")
             if job_id:
                 self.job_manager.update_job(job_id, status=JobStatus.RUNNING)
-            # Re-enter the async flow without SCIP check — handled by caller returning early
-            # For simplicity, we just let the exception propagate to the outer handler so the
-            # job is marked FAILED with a meaningful message rather than silently degrading.
-            raise
+            # Actually fall back by returning a sentinel \u2014 caller will continue
+            # to the Tree-sitter pipeline below
+            return "SCIP_FALLBACK"
 
         except Exception as e:
             error_logger(f"SCIP indexing failed for {path}: {e}")
+            warning_logger("Falling back to Tree-sitter...")
             if job_id:
-                self.job_manager.update_job(
-                    job_id, status=JobStatus.FAILED, end_time=datetime.now(), errors=[str(e)]
-                )
+                self.job_manager.update_job(job_id, status=JobStatus.RUNNING)
+            return "SCIP_FALLBACK"
 
     def _name_from_symbol(self, symbol: str) -> str:
         """Extract human-readable name from a SCIP symbol ID string."""
@@ -1187,9 +1197,11 @@ class GraphBuilder:
                 detected_lang = detect_project_lang(path, scip_languages)
 
                 if detected_lang and is_scip_available(detected_lang):
-                    info_logger(f"SCIP_INDEXER=true — using SCIP for language: {detected_lang}")
-                    await self._build_graph_from_scip(path, is_dependency, job_id, detected_lang)
-                    return   # SCIP handled it; skip Tree-sitter pipeline below
+                    info_logger(f"SCIP_INDEXER=true \u2014 using SCIP for language: {detected_lang}")
+                    result = await self._build_graph_from_scip(path, is_dependency, job_id, detected_lang)
+                    if result != "SCIP_FALLBACK":
+                        return   # SCIP handled it; skip Tree-sitter pipeline below
+                    # Otherwise fall through to Tree-sitter pipeline
                 else:
                     if detected_lang:
                         warning_logger(

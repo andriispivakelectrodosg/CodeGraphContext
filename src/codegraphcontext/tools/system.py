@@ -102,27 +102,28 @@ class SystemTools:
 
     def find_dead_code_tool(self) -> Dict[str, Any]:
         """Finds potentially unused functions (dead code)."""
-        # This logic was moved from CodeFinder to be a system diagnostic tool
         try:
             with self.db_manager.get_driver().session() as session:
                 result = session.run("""
                     MATCH (func:Function)
                     WHERE func.is_dependency = false
                       AND NOT func.name STARTS WITH '_'
-                      AND NOT func.name IN ['main', 'setup', 'run']
-                    OPTIONAL MATCH (caller:Function)-[:CALLS]->(func)
-                    WHERE caller.is_dependency = false
+                      AND NOT func.name IN ['main', '__main__', 'setup', 'run', 'configure',
+                          'activate', 'deactivate', 'register', 'init', 'dispose']
+                    OPTIONAL MATCH (caller)-[:CALLS]->(func)
+                    WHERE (caller:Function OR caller:File OR caller:Class)
+                      AND caller.is_dependency = false
                     WITH func, count(caller) as caller_count
                     WHERE caller_count = 0
                     RETURN func.name as function_name, func.path as path, func.line_number as line_number
                     ORDER BY func.path, func.line_number
-                    LIMIT 50
+                    LIMIT 100
                 """)
                 return {
                     "success": True,
                     "results": {
                         "potentially_unused_functions": [dict(record) for record in result],
-                        "note": "These functions might be entry points or called dynamically."
+                        "note": "These functions have no incoming CALLS edges (from Function, File, or Class callers). They might be entry points, dynamically dispatched, or called via decorators/framework registration."
                     }
                 }
         except Exception as e:

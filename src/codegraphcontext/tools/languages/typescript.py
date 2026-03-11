@@ -118,7 +118,10 @@ class TypescriptTreeSitterParser:
                     elif curr.parent and curr.parent.type == 'pair': # property: function
                         name_node = curr.parent.child_by_field_name('key')
 
-                return self._get_node_text(name_node) if name_node else None, curr.type, curr.start_point[0] + 1
+                name = self._get_node_text(name_node) if name_node else None
+                if name is not None:
+                    return name, curr.type, curr.start_point[0] + 1
+                # Anonymous arrow/function — keep walking up to find a named ancestor
             curr = curr.parent
         return None, None, None
 
@@ -573,5 +576,3 @@ def pre_scan_typescript(files: list[Path], parser_wrapper) -> dict:
                     
         except Exception as e:
             warning_logger(f"Tree-sitter pre-scan failed for {path}: {e}")
-    
-    return imports_map
