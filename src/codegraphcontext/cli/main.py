@@ -869,17 +869,25 @@ def start():
 @app.command()
 def index(
     path: Optional[str] = typer.Argument(None, help="Path to the directory or file to index. Defaults to the current directory."),
-    force: bool = typer.Option(False, "--force", "-f", help="Force re-index (delete existing and rebuild)")
+    force: bool = typer.Option(False, "--force", "-f", help="Force re-index (delete existing and rebuild)"),
+    scip: bool = typer.Option(False, "--scip", "-s", help="Use SCIP indexer for compiler-level accuracy (requires scip-<lang> binary installed)")
 ):
     """
     Indexes a directory or file by adding it to the code graph.
     If no path is provided, it indexes the current directory.
     
     Use --force to delete the existing index and rebuild from scratch.
+    Use --scip to enable SCIP-based indexing for higher accuracy call resolution.
     """
     _load_credentials()
     if path is None:
         path = str(Path.cwd())
+    
+    if scip:
+        # Temporarily enable SCIP for this run
+        import os
+        os.environ["SCIP_INDEXER"] = "true"
+        console.print("[cyan]Using SCIP indexer for compiler-level accuracy[/cyan]")
     
     if force:
         console.print("[yellow]Force re-indexing (--force flag detected)[/yellow]")
