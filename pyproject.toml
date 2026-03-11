@@ -34,6 +34,9 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+scip = [
+    "protobuf>=4.21.0",
+]
 parsing = [
     "tree-sitter>=0.21.0",
     "tree-sitter-language-pack>=0.6.0",
